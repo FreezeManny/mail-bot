@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # Reads the `go` directive, so the toolchain here is the one the
           # module declares — there is no second version to keep in sync.
@@ -37,7 +37,7 @@ jobs:
           cache: true
 
       - name: Install just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       # The same recipe developers run locally, so a green CI run is
       # reproducible with one command on a laptop.
