@@ -79,11 +79,33 @@ in-app log file to manage.
 
 ## Development
 
+[just](https://github.com/casey/just) drives the same recipes CI runs, so a
+green pipeline is reproducible with one command locally:
+
 ```
-go test ./...
-go vet ./...
-go build ./...
+just check          # go vet + go build   (CI runs this)
+just format         # gofmt -w .
+just format-check   # fail if anything is unformatted   (CI runs this)
+just test           # go test ./...
+just build          # check, then build ./mailsorter
+just docker-build   # the image CI builds, minus the push
 ```
+
+## Releases
+
+Releases are automated with
+[release-please](https://github.com/googleapis/release-please). Commit messages
+follow [Conventional Commits](https://www.conventionalcommits.org/) and a PR
+title check enforces it.
+
+- Merging to `main` updates a release PR with the changelog and version bump.
+- Merging that PR tags the release.
+- Publishing the release builds and pushes the multi-arch container image to
+  `ghcr.io/freezemanny/mail-bot` — the image is **not** pushed by hand, and
+  `latest` only ever moves on a published release.
+
+To run a released image instead of building locally, point `docker-compose.yml`
+at `image: ghcr.io/freezemanny/mail-bot:latest` in place of `build: .`.
 
 `internal/rules`, `internal/config` and `internal/notify` have unit tests -
 including a regression test that the Telegram bot token (which sits in the

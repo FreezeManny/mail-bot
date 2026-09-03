@@ -1,0 +1,41 @@
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+
+version: 2
+updates:
+  # Go module dependencies (go.mod / go.sum). Everything here is compiled into
+  # the shipped binary: bumping one changes what users run, so it belongs in
+  # the changelog. `fix` lands it in a visible release-please section, which is
+  # the whole reason a release PR gets opened — `chore` is hidden, and a run of
+  # `chore(deps)` commits leaves release-please with nothing user facing to
+  # release.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+
+  # The base images in the Dockerfile. These also ship — the alpine runtime is
+  # what the service actually runs on — so they are releasable too.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+
+  # Workflow actions are pinned to floating major tags, so without this they
+  # drift silently and never surface a PR.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: weekly
+    # CI-only: never a release on its own.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      actions:
+        patterns: ["*"]

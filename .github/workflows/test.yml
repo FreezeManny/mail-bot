@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  # The pull request is the gate: every change reaches main through one, so
+  # testing pull requests tests everything that can land. A bare `push:` would
+  # fire on every branch as well, running a second, identical job before the PR
+  # is even open.
+  pull_request:
+  # For re-running against a branch without pushing an empty commit.
+  workflow_dispatch:
+
+# A newer push to the same PR makes an in-flight run obsolete — drop it rather
+# than pay for a result nobody will read.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Named `test` because the Main-Protection ruleset requires that check by
+  # name; renaming the job silently un-gates the branch.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Reads the `go` directive, so the toolchain here is the one the
+          # module declares — there is no second version to keep in sync.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # The same recipe developers run locally, so a green CI run is
+      # reproducible with one command on a laptop.
+      - name: Lint & vet
+        run: just check
+
+      - name: Check formatting
+        run: just format-check
+
+      - name: Run tests
+        run: just test
