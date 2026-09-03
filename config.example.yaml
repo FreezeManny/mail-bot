@@ -1,0 +1,51 @@
+# Copy to config.yaml, adjust as needed, and mount it into the container
+# read-only (see docker-compose.yml). Values ending in _env name an
+# environment variable to read the actual secret from - put those in .env,
+# never in this file.
+
+poll_interval_seconds: 60   # how often each account's INBOX is checked for new mail
+
+notifiers:
+  - name: telegram-main
+    type: telegram
+    bot_token_env: TELEGRAM_BOT_TOKEN
+    chat_id_env: TELEGRAM_CHAT_ID
+  # Add more channels later by giving them a new `type` here once
+  # implemented, e.g.:
+  # - name: ops-webhook
+  #   type: webhook
+  #   url_env: WEBHOOK_URL
+
+accounts:
+  # One entry per mailbox you want sorted. Add or remove accounts freely -
+  # the service spawns one independent worker per entry.
+  - name: example-account
+    host: imap.example.com
+    port: 993              # optional, defaults to 993
+    username: you@example.com
+    password_env: EXAMPLE_ACCOUNT_IMAP_PASSWORD
+    # notifiers: omitted here on purpose - defaults to every notifier
+    # declared above. Set it explicitly to use only some, e.g.
+    # [telegram-main], to fan out to more than one, e.g.
+    # [telegram-main, ops-webhook], or to [] to opt this account out
+    # of notifications entirely.
+    folder_rules:
+      # First matching rule wins. Each rule matches either an exact sender
+      # address, or any sender whose address host is one of the domains or
+      # a subdomain of one (e.g. "example.com" also matches
+      # "user@mail.example.com", but not "user@notexample.com").
+      - folder: "Sort/Bank"
+        domains: ["yourbank.example"]
+      - folder: "Sort/Shopping"
+        domains: ["shop.example", "marketplace.example"]
+      - folder: "Sort/Newsletters"
+        exact: ["newsletter@updates.example"]
+        domains: ["news.example"]
+
+  - name: another-account
+    host: imap.another-example.com
+    username: you@another-example.com
+    password_env: ANOTHER_ACCOUNT_IMAP_PASSWORD
+    folder_rules:
+      - folder: "Sort/Delivery"
+        domains: ["parcel.example"]
