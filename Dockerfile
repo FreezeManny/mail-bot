@@ -8,7 +8,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mailsorter ./cmd/mailsorter
 
-FROM alpine:3.22
+FROM alpine:3.24
 # ca-certificates is required for IMAP over TLS; tzdata for local-time handling.
 # Alpine ships neither by default.
 RUN apk add --no-cache ca-certificates tzdata \
