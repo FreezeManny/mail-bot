@@ -1,0 +1,9 @@
+# Deny everything, then allow only what the build actually needs.
+# Keeps secrets (.env, config.yaml, EmailSorter.json) and .git out of the
+# build context entirely.
+*
+
+!go.mod
+!go.sum
+!cmd
+!internal

@@ -1,0 +1,11 @@
+services:
+  mailsorter:
+    build: .
+    container_name: mailsorter
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      CONFIG_PATH: /app/config.yaml
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
