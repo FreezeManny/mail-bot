@@ -16,11 +16,8 @@ type FolderRule struct {
 	Domains []string `yaml:"domains"`
 }
 
-// Normalize lowercases and trims the rule's match lists in place, so Match
-// can compare against them directly instead of re-normalizing every rule
-// for every message. Folder is only trimmed, never lowercased: IMAP
-// mailbox names are case-sensitive. config.Load calls this once per rule
-// at startup.
+// Normalize lowercases and trims the rule's match lists in place
+// imap is case-sensitive, so we only trim it, not lowercase it
 func (r *FolderRule) Normalize() {
 	r.Folder = strings.TrimSpace(r.Folder)
 	for i, exact := range r.Exact {
