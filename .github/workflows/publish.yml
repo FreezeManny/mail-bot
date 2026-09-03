@@ -4,53 +4,62 @@ on:
   release:
     types: [published]
 
-# Two releases published close together must not race to overwrite `latest`;
-# an in-flight push is never cancelled half-way.
+# Two releases published close together must not race for the same tags in the
+# registry; an in-flight push is never cancelled half-way.
 concurrency:
   group: publish
   cancel-in-progress: false
 
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
 jobs:
   publish:
-    name: docker
+    name: Build and push image
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write # pushing to GHCR
 
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      # The Dockerfile builds with CGO_ENABLED=0, so arm64 cross-compiles
-      # without an emulator — QEMU is only needed for the alpine runtime layer's
-      # `apk add`.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Single-component repo, so release-please tags plain `vX.Y.Z` — no
+      # component prefix to strip, and `type=semver` parses the tag directly.
       # `latest` is only applied here, on a published release, so it never
-      # points at an untagged commit from main.
-      - name: Tags
+      # points at an untagged commit from main. `sha-` is the immutable handle:
+      # every other tag moves.
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mail-bot
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+            type=sha,prefix=sha-
 
-      - name: Build & push
+      # The Dockerfile builds with CGO_ENABLED=0, so arm64 cross-compiles
+      # without an emulator — QEMU is only needed for the alpine runtime
+      # layer's `apk add`. Drop both if the service will only ever run on
+      # amd64; it roughly halves the build.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
         uses: docker/build-push-action@v7
         with:
           context: .
