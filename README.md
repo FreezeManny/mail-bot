@@ -107,7 +107,8 @@ title check enforces it.
 To run a released image instead of building locally, point `docker-compose.yml`
 at `image: ghcr.io/freezemanny/mail-bot:latest` in place of `build: .`.
 
-`internal/rules`, `internal/config` and `internal/notify` have unit tests -
+`internal/rules`, `internal/config`, `internal/notify`, `internal/account`
+and the `cmd/mailsorter` wiring have unit tests -
 including a regression test that the Telegram bot token (which sits in the
 request URL, and which `net/http` embeds in every transport error) never
 reaches a returned error and therefore never reaches the logs. The
