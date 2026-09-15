@@ -40,6 +40,22 @@ const (
 	// fail - a refused login answers in well under a second - so that a
 	// server rejecting us immediately still backs off instead of spinning.
 	stableConnection = time.Minute
+
+	// connectionAlertDelay is how long an account has to stay offline
+	// before a connection failure is worth notifying about. Two things have
+	// to pass through unreported: the drop the next reconnect repairs - GMX
+	// ends every session after ~3h, and a reconnect a second later is not
+	// news to anyone - and the short outage that fixes itself, a router
+	// rebooting or the line dropping for a minute. Past that, nobody is
+	// coming back on their own: a rejected password, a host that stays
+	// unreachable.
+	//
+	// The alert lands on the first reconnect attempt after the delay has
+	// passed, and those attempts are spaced by a doubling backoff, so it
+	// arrives a little later than the delay itself - about 2 minutes for
+	// the value below. That slack costs nothing: unsorted mail waits in the
+	// INBOX, it is not lost.
+	connectionAlertDelay = 2 * time.Minute
 )
 
 // Worker runs the sort loop for a single account.
@@ -50,12 +66,20 @@ type Worker struct {
 	dryRun       bool
 	log          *slog.Logger
 
-	// connectionFailing and processingFailing track whether we're currently
-	// in a failure state for each concern, so a notification fires once on
-	// the transition into/out of failure rather than on every retry or
-	// every poll cycle a stuck problem keeps recurring.
-	connectionFailing bool
+	// connectionAlerted and processingFailing track whether a notification
+	// has already gone out for the failure currently in progress, so a
+	// stuck problem notifies once rather than on every retry or every poll
+	// cycle it keeps recurring.
+	connectionAlerted bool
 	processingFailing bool
+
+	// failingSince is when the current run of connection failures began,
+	// zero while the connection is healthy. It measures how long the
+	// account has actually been offline across repeated reconnect
+	// attempts, which is what connectionAlertDelay is compared against -
+	// counting attempts instead would make the alert's timing depend on
+	// the backoff schedule.
+	failingSince time.Time
 
 	// examined remembers which INBOX UIDs have already been looked at, so
 	// an unread message matching no rule isn't re-fetched on every poll
@@ -92,6 +116,11 @@ func New(acc config.Account, notifiers map[string]notify.Notifier, pollInterval 
 // sense for that connection's lifetime.
 type session struct {
 	client *imapclient.Client
+
+	// connectedAt is when this connection completed login, so the poll loop
+	// can tell a connection that is actually working from one that is about
+	// to drop again.
+	connectedAt time.Time
 
 	// ensuredFolders remembers the destination folders already created or
 	// confirmed present on this connection, so sorting a batch of messages
@@ -148,8 +177,7 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 		if err != nil {
 			retryIn := backoff.next(time.Since(started))
-			w.reportFailure(ctx, &w.connectionFailing, "connection", err)
-			w.log.Error("connection lost, will reconnect", "error", err, "retry_in", retryIn)
+			w.noteConnectionFailed(ctx, err, retryIn)
 			select {
 			case <-time.After(retryIn):
 			case <-ctx.Done():
@@ -198,10 +226,13 @@ func (w *Worker) connectAndServe(ctx context.Context) error {
 		w.examined = make(map[imap.UID]bool)
 	}
 
-	s := &session{client: client, ensuredFolders: make(map[string]bool)}
+	s := &session{
+		client:         client,
+		connectedAt:    time.Now(),
+		ensuredFolders: make(map[string]bool),
+	}
 
 	w.log.Info("connected")
-	w.reportRecovery(ctx, &w.connectionFailing, "connection restored")
 
 	if err := w.pollUnseen(ctx, s); err != nil {
 		return err
@@ -222,6 +253,12 @@ func (w *Worker) pollLoop(ctx context.Context, s *session) error {
 		case <-ticker.C:
 			if err := w.pollUnseen(ctx, s); err != nil {
 				return err
+			}
+			// Polling cleanly for a while is what proves a connection is
+			// back; a login that succeeds and then drops seconds later
+			// proves nothing and must not clear a failure run.
+			if time.Since(s.connectedAt) >= stableConnection {
+				w.noteConnectionHealthy(ctx)
 			}
 		}
 	}
@@ -307,6 +344,33 @@ func (w *Worker) unexamined(unseen []imap.UID) []imap.UID {
 func isConnectionError(err error) bool {
 	var status *imap.Error
 	return !errors.As(err, &status)
+}
+
+// noteConnectionFailed logs a failed connection attempt and, once the
+// account has been offline for connectionAlertDelay, notifies about it. A
+// drop the next attempt repairs only gets a warning in the log: it is the
+// server ending a session, not something anyone has to act on.
+func (w *Worker) noteConnectionFailed(ctx context.Context, err error, retryIn time.Duration) {
+	if w.failingSince.IsZero() {
+		w.failingSince = time.Now()
+	}
+	offline := time.Since(w.failingSince)
+	if offline < connectionAlertDelay {
+		w.log.Warn("connection lost, will reconnect", "error", err, "retry_in", retryIn)
+		return
+	}
+	w.log.Error("connection lost, will reconnect", "error", err, "retry_in", retryIn, "offline_for", offline.Round(time.Second))
+	w.reportFailure(ctx, &w.connectionAlerted, "connection", err)
+}
+
+// noteConnectionHealthy ends the current run of connection failures, and
+// notifies about the recovery if the failure was ever notified about.
+func (w *Worker) noteConnectionHealthy(ctx context.Context) {
+	if w.failingSince.IsZero() {
+		return
+	}
+	w.failingSince = time.Time{}
+	w.reportRecovery(ctx, &w.connectionAlerted, "connection restored")
 }
 
 // reportFailure notifies once on the transition into a failure state for
