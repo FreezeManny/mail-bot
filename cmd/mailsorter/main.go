@@ -15,6 +15,7 @@ import (
 
 	"github.com/manuelfritz/mail-bot/internal/account"
 	"github.com/manuelfritz/mail-bot/internal/config"
+	"github.com/manuelfritz/mail-bot/internal/notify"
 )
 
 func main() {
@@ -53,13 +54,25 @@ func run() int {
 		return 1
 	}
 
+	// Everything the workers run on is resolved here, before any of them
+	// starts: config entries, secrets out of the environment and notifier
+	// names into notifier instances. A worker is then handed a finished
+	// account.Props and looks nothing up for itself, so a missing env var
+	// or an unknown notifier name is a startup failure with a clear message
+	// rather than something that surfaces mid-run inside one account.
+	props, err := accountProps(cfg, dryRun, log)
+	if err != nil {
+		log.Error("failed to resolve accounts", "error", err)
+		return 1
+	}
+
 	if dryRun {
 		log.Warn("DRY_RUN enabled: no folders will be created, no messages moved, no notifications sent")
 	}
 
 	var wg sync.WaitGroup
-	for _, acc := range cfg.Accounts {
-		w := account.New(acc, cfg.Notifiers, cfg.PollInterval, dryRun, log)
+	for _, p := range props {
+		w := account.New(p)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -67,11 +80,52 @@ func run() int {
 		}()
 	}
 
-	log.Info("mailsorter started", "accounts", len(cfg.Accounts))
+	log.Info("mailsorter started", "accounts", len(props))
 	<-ctx.Done()
 	log.Info("shutting down")
 	wg.Wait()
 	return 0
+}
+
+// accountProps turns the loaded config into one fully resolved account.Props
+// per account.
+func accountProps(cfg *config.Config, dryRun bool, log *slog.Logger) ([]account.Props, error) {
+	props := make([]account.Props, 0, len(cfg.Accounts))
+	for _, acc := range cfg.Accounts {
+		notifiers, err := resolveNotifiers(acc, cfg.Notifiers)
+		if err != nil {
+			return nil, err
+		}
+		props = append(props, account.Props{
+			Name:         acc.Name,
+			Host:         acc.Host,
+			Port:         acc.Port,
+			Username:     acc.Username,
+			Password:     acc.Password(),
+			FolderRules:  acc.FolderRules,
+			Notifiers:    notifiers,
+			PollInterval: cfg.PollInterval,
+			DryRun:       dryRun,
+			Logger:       log,
+		})
+	}
+	return props, nil
+}
+
+// resolveNotifiers looks acc's notifier names up in the built notifiers.
+// config.Load has already rejected unknown names, so a miss here means the
+// two have drifted apart - reported rather than silently dropped, since a
+// dropped notifier means an account that quietly stops alerting.
+func resolveNotifiers(acc config.Account, byName map[string]notify.Notifier) ([]notify.Notifier, error) {
+	notifiers := make([]notify.Notifier, 0, len(acc.Notifiers))
+	for _, name := range acc.Notifiers {
+		n, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("account %q: unknown notifier %q", acc.Name, name)
+		}
+		notifiers = append(notifiers, n)
+	}
+	return notifiers, nil
 }
 
 func envOr(key, fallback string) string {

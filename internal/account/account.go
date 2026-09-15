@@ -18,7 +18,6 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 
-	"github.com/manuelfritz/mail-bot/internal/config"
 	"github.com/manuelfritz/mail-bot/internal/imapops"
 	"github.com/manuelfritz/mail-bot/internal/notify"
 	"github.com/manuelfritz/mail-bot/internal/rules"
@@ -58,13 +57,45 @@ const (
 	connectionAlertDelay = 2 * time.Minute
 )
 
+// Props is everything a Worker needs to run, fully resolved by the caller:
+// no lookups, no env reads, no config parsing happen in this package. The
+// mailbox is addressed by Host/Port/Username/Password rather than by a
+// config struct, and Notifiers are the notifier instances themselves rather
+// than names to resolve, so the wiring all lives in one place (see
+// cmd/mailsorter) and a test can build a Worker without a config file.
+type Props struct {
+	// Name identifies the account in logs and notifications.
+	Name     string
+	Host     string
+	Port     int
+	Username string
+	Password string
+
+	// FolderRules are matched in order, first match wins, and are expected
+	// to have been normalized and validated already (see rules.Normalize
+	// and rules.Validate).
+	FolderRules []rules.FolderRule
+
+	// Notifiers receive this account's sorted-message and status events.
+	// Empty means the account is silent.
+	Notifiers []notify.Notifier
+
+	// PollInterval is how often INBOX is checked for unseen mail.
+	PollInterval time.Duration
+
+	// DryRun logs what would be moved without creating folders, moving
+	// messages or sending notifications.
+	DryRun bool
+
+	// Logger is the base logger; the Worker derives an account-scoped one
+	// from it.
+	Logger *slog.Logger
+}
+
 // Worker runs the sort loop for a single account.
 type Worker struct {
-	account      config.Account
-	notifiers    []notify.Notifier
-	pollInterval time.Duration
-	dryRun       bool
-	log          *slog.Logger
+	props Props
+	log   *slog.Logger
 
 	// connectionAlerted and processingFailing track whether a notification
 	// has already gone out for the failure currently in progress, so a
@@ -93,22 +124,12 @@ type Worker struct {
 	uidValidity uint32
 }
 
-// New builds a Worker for acc, resolving its configured notifier names
-// against the shared notifiers map.
-func New(acc config.Account, notifiers map[string]notify.Notifier, pollInterval time.Duration, dryRun bool, log *slog.Logger) *Worker {
-	var ns []notify.Notifier
-	for _, name := range acc.Notifiers {
-		if n, ok := notifiers[name]; ok {
-			ns = append(ns, n)
-		}
-	}
+// New builds a Worker from fully resolved props.
+func New(p Props) *Worker {
 	return &Worker{
-		account:      acc,
-		notifiers:    ns,
-		pollInterval: pollInterval,
-		dryRun:       dryRun,
-		log:          log.With("account", acc.Name),
-		examined:     make(map[imap.UID]bool),
+		props:    p,
+		log:      p.Logger.With("account", p.Name),
+		examined: make(map[imap.UID]bool),
 	}
 }
 
@@ -188,7 +209,7 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) connectAndServe(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", w.account.Host, w.account.Port)
+	addr := fmt.Sprintf("%s:%d", w.props.Host, w.props.Port)
 	client, err := imapclient.DialTLS(addr, nil)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
@@ -211,7 +232,7 @@ func (w *Worker) connectAndServe(ctx context.Context) error {
 		}
 	}()
 
-	if err := client.Login(w.account.Username, w.account.Password()).Wait(); err != nil {
+	if err := client.Login(w.props.Username, w.props.Password).Wait(); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
 
@@ -244,7 +265,7 @@ func (w *Worker) connectAndServe(ctx context.Context) error {
 // pollLoop keeps sorting on a plain interval until the connection errors
 // out, at which point Run reconnects.
 func (w *Worker) pollLoop(ctx context.Context, s *session) error {
-	ticker := time.NewTicker(w.pollInterval)
+	ticker := time.NewTicker(w.props.PollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -404,12 +425,12 @@ func (w *Worker) processMessage(ctx context.Context, s *session, msg *imapclient
 		return nil
 	}
 
-	folder, ok := rules.Match(sender, w.account.FolderRules)
+	folder, ok := rules.Match(sender, w.props.FolderRules)
 	if !ok {
 		return nil
 	}
 
-	if w.dryRun {
+	if w.props.DryRun {
 		w.log.Info("dry-run: would move message", "uid", msg.UID, "from", sender, "subject", msg.Envelope.Subject, "folder", folder)
 		return nil
 	}
@@ -429,7 +450,7 @@ func (w *Worker) processMessage(ctx context.Context, s *session, msg *imapclient
 	w.log.Info("moved message", "uid", msg.UID, "from", sender, "subject", msg.Envelope.Subject, "folder", folder)
 
 	w.notifyEvent(ctx, notify.Event{
-		Account: w.account.Name,
+		Account: w.props.Name,
 		Subject: msg.Envelope.Subject,
 		Sender:  sender,
 		Folder:  folder,
@@ -444,14 +465,14 @@ func (w *Worker) processMessage(ctx context.Context, s *session, msg *imapclient
 // account.
 func (w *Worker) notify(ctx context.Context, message string) {
 	w.notifyEvent(ctx, notify.Event{
-		Account: w.account.Name,
+		Account: w.props.Name,
 		Message: message,
 		Time:    time.Now(),
 	})
 }
 
 func (w *Worker) notifyEvent(ctx context.Context, ev notify.Event) {
-	for _, n := range w.notifiers {
+	for _, n := range w.props.Notifiers {
 		if err := n.Notify(ctx, ev); err != nil {
 			w.log.Error("notifier failed", "notifier", n.Name(), "error", err)
 		}
