@@ -10,7 +10,10 @@ exported into.)
 
 - One worker per account: connect, check `INBOX` for unseen mail, sort
   matches, then wait `poll_interval_seconds` and repeat. Reconnects with
-  exponential backoff on any connection error. (IMAP `IDLE` for
+  exponential backoff on any connection error, starting over from one
+  second whenever the connection that dropped had been up and working -
+  some providers (GMX) end a healthy session after a few hours, and that
+  must not ratchet the delay up over a day of uptime. (IMAP `IDLE` for
   near-instant sorting was tried and dropped for now to keep this simple -
   may come back later.)
 - Read/unread state is never touched. Messages are found with a `SEARCH` on
@@ -48,8 +51,12 @@ exported into.)
   pluggable `notify.Notifier`s used for successful sorts) only on the
   *transition* into or out of failure - once when it breaks, once when it
   recovers - rather than on every retry or every poll cycle a stuck problem
-  keeps recurring. See `internal/account`'s `connectionFailing` /
-  `processingFailing` handling.
+  keeps recurring. Connection failures additionally have to survive
+  `connectionAlertDelay` (2 minutes) before they notify at all, so neither
+  the routine drop-and-reconnect of a provider-enforced session limit nor a
+  minute of flaky line becomes a notification nobody reads. See
+  `internal/account`'s `noteConnectionFailed` / `processingFailing`
+  handling.
 
 ## Setup
 
@@ -107,8 +114,9 @@ title check enforces it.
 To run a released image instead of building locally, point `docker-compose.yml`
 at `image: ghcr.io/freezemanny/mail-bot:latest` in place of `build: .`.
 
-`internal/rules`, `internal/config` and `internal/notify` have unit tests -
-including a regression test that the Telegram bot token (which sits in the
+`internal/rules`, `internal/config`, `internal/notify` and
+`internal/account` (reconnect backoff and the connection-alert policy) have
+unit tests - including a regression test that the Telegram bot token (which sits in the
 request URL, and which `net/http` embeds in every transport error) never
 reaches a returned error and therefore never reaches the logs. The
 `imapops` move/copy/expunge logic was additionally verified by hand against
