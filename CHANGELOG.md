@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/FreezeManny/mail-bot/compare/mail-bot-v0.1.0...mail-bot-v0.1.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* added min alert time ([#11](https://github.com/FreezeManny/mail-bot/issues/11)) ([a7daff3](https://github.com/FreezeManny/mail-bot/commit/a7daff38c57fbd2580d21d1e54b82cc8bdd14e15))
+
 ## 0.1.0 (2026-09-03)
 
 
