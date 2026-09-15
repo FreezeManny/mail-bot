@@ -29,6 +29,17 @@ const inboxMailbox = "INBOX"
 const (
 	initialReconnectBackoff = time.Second
 	maxReconnectBackoff     = 5 * time.Minute
+
+	// stableConnection is how long a connection has to have lasted for the
+	// next drop to be treated as a fresh problem rather than a continuation
+	// of the last one. Servers that cap session lifetime (GMX drops the
+	// session after ~3h of perfectly healthy polling) would otherwise walk
+	// the backoff up to its maximum over a day of uptime, leaving the
+	// account unsorted for five minutes after every routine drop. The
+	// threshold has to stay above the time a doomed connection takes to
+	// fail - a refused login answers in well under a second - so that a
+	// server rejecting us immediately still backs off instead of spinning.
+	stableConnection = time.Minute
 )
 
 // Worker runs the sort loop for a single account.
@@ -101,30 +112,50 @@ func (s *session) ensureFolder(mailbox string) error {
 	return nil
 }
 
+// reconnectBackoff is the wait schedule between reconnect attempts. It
+// doubles for as long as connections keep failing quickly, and starts over
+// once one has lasted at least stableConnection - so a server that ends
+// healthy sessions on a timer is met with an immediate reconnect every
+// time, while one that is genuinely down is backed off from. The zero
+// value is ready to use.
+type reconnectBackoff struct {
+	delay time.Duration
+}
+
+// next returns how long to wait before reconnecting, given that the
+// connection that just ended lasted uptime, and advances the schedule.
+func (b *reconnectBackoff) next(uptime time.Duration) time.Duration {
+	if b.delay == 0 || uptime >= stableConnection {
+		b.delay = initialReconnectBackoff
+	}
+	wait := b.delay
+	b.delay *= 2
+	if b.delay > maxReconnectBackoff {
+		b.delay = maxReconnectBackoff
+	}
+	return wait
+}
+
 // Run connects and serves until ctx is canceled, reconnecting with backoff
 // on any error. It never returns until ctx is done.
 func (w *Worker) Run(ctx context.Context) {
-	backoff := initialReconnectBackoff
+	var backoff reconnectBackoff
 	for ctx.Err() == nil {
+		started := time.Now()
 		err := w.connectAndServe(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
+			retryIn := backoff.next(time.Since(started))
 			w.reportFailure(ctx, &w.connectionFailing, "connection", err)
-			w.log.Error("connection lost, will reconnect", "error", err, "retry_in", backoff)
+			w.log.Error("connection lost, will reconnect", "error", err, "retry_in", retryIn)
 			select {
-			case <-time.After(backoff):
+			case <-time.After(retryIn):
 			case <-ctx.Done():
 				return
 			}
-			backoff *= 2
-			if backoff > maxReconnectBackoff {
-				backoff = maxReconnectBackoff
-			}
-			continue
 		}
-		backoff = initialReconnectBackoff
 	}
 }
 
