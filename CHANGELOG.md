@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/FreezeManny/mail-bot/compare/mail-bot-v0.1.1...mail-bot-v0.1.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* **deps:** bump github.com/emersion/go-imap/v2 ([#14](https://github.com/FreezeManny/mail-bot/issues/14)) ([822cf42](https://github.com/FreezeManny/mail-bot/commit/822cf42182f9d45177985d38cb27ca699a123e95))
+
 ## [0.1.1](https://github.com/FreezeManny/mail-bot/compare/mail-bot-v0.1.0...mail-bot-v0.1.1) (2026-09-15)
 
 
